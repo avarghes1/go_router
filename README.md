@@ -11,6 +11,23 @@ Installation:
 
 `go get github.com/avarghes1/go_router/router`
 
+Import:
+---
+
+`import github.com/avarghes1/go_router_router`
+
+Wire up the router:
+---
+
+```
+http.HandleFunc("/", go_router.Dispatch)
+http.ListenAndServe(":8080", nil)
+```
+
+Setting up a route:
+---
+
+`go_router.RegisterRoute("GET", "/v1/test/retrieve/id/{Int}", test.Retrieve)`
 
 Example Controller:
 ---
@@ -20,11 +37,4 @@ func Retrieve(req go_router.Request) (string, error) {
     fmt.Println(req["id"].Int())
     return "test", nil
 }
-```
-
-Setting up a route:
----
-
-```
-go_router.RegisterRoute("GET", "/v1/test/retrieve/id/{Int}", test.Retrieve)
 ```
