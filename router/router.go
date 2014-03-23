@@ -1,6 +1,11 @@
+// go_router is a simple rest based router.
+// The supported HTTP methods are GET, POST and DELETE.
+// The url path has to be in the form `/version/resource/handler/param-name/param-value`.
+//
+// Json is the supported response type.
+// It also supports the use of filters for pre and post dispatch process.
+//
 // @author: avarghese
-// Simple rest router
-
 package go_router
 
 import (
@@ -24,10 +29,10 @@ const (
 )
 
 type (
+	nodeMap   map[string]Node
+	routeMap  map[string]nodeMap
+	filterMap map[string]Filter
 	Request   map[string]Param
-	NodeMap   map[string]Node
-	RouteMap  map[string]NodeMap
-	FilterMap map[string]Filter
 	// Node is a controller function.
 	// It accepts a request map.
 	// Returns an interface and an error.
@@ -52,8 +57,8 @@ type (
 )
 
 var (
-	routes  = make(RouteMap)
-	filters = make(FilterMap)
+	routes  = make(routeMap)
+	filters = make(filterMap)
 )
 
 // Function returns a request parameter. Accepted types are int64,
@@ -167,26 +172,51 @@ func postDispatch(r *http.Request, req Request) (err error) {
 }
 
 // Get an interger param
+//
+//  Usage:
+//
+//      id := req["id"].Int().
+//
 func (p *RequestParam) Int() int64 {
 	return p.Value.(int64)
 }
 
 // Get a float param
+//
+//  Usage:
+//
+//      id := req["id"].Float().
+//
 func (p *RequestParam) Float() float64 {
 	return p.Value.(float64)
 }
 
 // Get a boolean param
+//
+//  Usage:
+//
+//      id := req["id"].Bool().
+//
 func (p *RequestParam) Bool() bool {
 	return p.Value.(bool)
 }
 
 // Get a string param
+//
+//  Usage:
+//
+//      id := req["id"].String().
+//
 func (p *RequestParam) String() string {
 	return p.Value.(string)
 }
 
 // Register a filter.
+//
+//  Usage:
+//
+//      go_router.RegisterFilte("filter", test_filter)
+//
 func RegisterFilter(name string, f Filter) error {
 	if _, ok := filters[name]; ok {
 		return errors.New("Filter name is already registered")
@@ -197,6 +227,12 @@ func RegisterFilter(name string, f Filter) error {
 
 // Register a route.
 // Parameters required are http method, url path and a controller.
+//
+//  Usage:
+//
+//      go_router.RegisterRoute(GET, "/v1/test/retrieve/id/{Int}", test_controller.Retrieve)
+//      go_router.RegisterRoute(POST, "/v1/test/save", test_controller.Save)
+//
 func RegisterRoute(method string, path string, n Node) error {
 	if nodes, ok := routes[method]; ok {
 		if _, ok := nodes[path]; ok {
@@ -205,7 +241,7 @@ func RegisterRoute(method string, path string, n Node) error {
 		}
 	}
 	if _, ok := routes[method]; !ok {
-		nodes := make(NodeMap)
+		nodes := make(nodeMap)
 		nodes[path] = n
 		routes[method] = nodes
 		return nil
@@ -217,6 +253,12 @@ func RegisterRoute(method string, path string, n Node) error {
 
 // Dispatch a Request.
 // Only supports json responses.
+//
+//  Usage:
+//
+//      http.HandleFunc("/", router.Dispatch)
+//      http.ListenAndServe(":8080", nil)
+//
 func Dispatch(w http.ResponseWriter, r *http.Request) {
 	var routeKey string
 	// make a map for request params
@@ -226,6 +268,8 @@ func Dispatch(w http.ResponseWriter, r *http.Request) {
 		if err := recover(); err != nil {
 			// log the error using a logger.
 			// log.Error(err)
+// print to terminal for now.
+			fmt.Println(err)
 			internalError(w, r)
 		}
 	}()
