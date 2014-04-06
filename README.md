@@ -27,14 +27,17 @@ http.ListenAndServe(":8080", nil)
 Setting up a route:
 ---
 
-`go_router.RegisterRoute("GET", "/v1/test/retrieve/id/{Int}", test.Retrieve)`
+`go_router.RegisterRoute("GET", "/v1/test/retrieve", test.Retrieve)`
 
 Example Controller:
 ---
 
 ```
-func Retrieve(req go_router.Request) (string, error) {
-    fmt.Println(req["id"].Int())
-    return "test", nil
+type Test struct {
+    Id int64
+}
+func GetUser(t *Test) (string, error) {
+    fmt.Println(t)
+    return "user", nil
 }
 ```

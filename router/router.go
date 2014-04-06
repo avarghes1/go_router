@@ -6,7 +6,7 @@
 // It also supports the use of filters for pre and post dispatch process.
 //
 // @author: avarghese
-package go_router
+package router
 
 import (
 	"encoding/json"
@@ -18,24 +18,31 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 const (
-	INT    = "{Int}"
-	FLOAT  = "{Float}"
-	BOOL   = "{Bool}"
-	STRING = "{String}"
-	JSON   = "application/json"
+	JSON = "application/json"
 )
 
 type (
 	nodeMap   map[string]Node
 	routeMap  map[string]nodeMap
 	filterMap map[string]Filter
-	Request   map[string]Param
+	Request   map[string]*RequestParam
 	// Node is a controller function.
-	// It accepts a request map.
+	// The function should have a pointer to all required request parameters.
 	// Returns an interface and an error.
+	// Example:
+	//      type Test struct {
+	//          Id int64
+	//      }
+	//      func GetUser(t *Test) (string, error) {
+	//          fmt.Println(t)
+	//          return "user", nil
+	//      }
+	//
 	Node interface{}
 	// Filters allow for pre and post dispatch work.
 	// For example verifying api key.
@@ -44,14 +51,7 @@ type (
 		PreDispatch(*http.Request, Request) error
 		PostDispatch(*http.Request, Request) error
 	}
-	Param interface {
-		Int() int64
-		Float() float64
-		Bool() bool
-		String() string
-	}
 	RequestParam struct {
-		Type  string
 		Value interface{}
 	}
 )
@@ -60,21 +60,6 @@ var (
 	routes  = make(routeMap)
 	filters = make(filterMap)
 )
-
-// Function returns a request parameter. Accepted types are int64,
-// float64, bool and string.
-func toParam(i interface{}) RequestParam {
-	if v, err := strconv.ParseInt(i.(string), 10, 64); err == nil {
-		return RequestParam{Value: v, Type: INT}
-	}
-	if v, err := strconv.ParseFloat(i.(string), 64); err == nil {
-		return RequestParam{Value: v, Type: FLOAT}
-	}
-	if v, err := strconv.ParseBool(i.(string)); err == nil {
-		return RequestParam{Value: v, Type: BOOL}
-	}
-	return RequestParam{Value: i.(string), Type: STRING}
-}
 
 // Get the controller associated with the incoming request.
 func getNode(method string, path string) (Node, error) {
@@ -107,23 +92,25 @@ func internalError(w http.ResponseWriter, r *http.Request) {
 // Parse the incoming request url for parameters.
 // supported url is in the form
 // /version/resource/handler/{param-name}/{param}
-func parseGet(r *http.Request, req Request) string {
+func parseGet(r *http.Request, req Request) (string, error) {
 	s := strings.Split(html.EscapeString(
 		strings.TrimRight(r.URL.Path, "/")), "/")
 	l := len(s)
-	for i := 4; i < l; i += 2 {
-		t := toParam(s[i+1])
-		req[s[i]] = &t
-		s[i+1] = t.Type
+	if l <= 3 || l%2 != 0 {
+		return "", errors.New("Not Found")
 	}
-	return strings.Join(s, "/")
+	for i := 4; i < l-1; i += 2 {
+		t := RequestParam{Value: s[i+1]}
+		req[s[i]] = &t
+	}
+	return strings.Join(s[0:4], "/"), nil
 }
 
 // Parse the request form for query parameters
 // as well as post params.
 func parseForm(r *http.Request, req Request) Request {
 	for k, v := range r.Form {
-		t := toParam(v[0])
+		t := RequestParam{Value: v[0]}
 		req[k] = &t
 	}
 	return req
@@ -171,47 +158,91 @@ func postDispatch(r *http.Request, req Request) (err error) {
 	return nil
 }
 
+// function to get ensure first letter is caps
+func upperFirst(s string) string {
+	if s == "" {
+		return ""
+	}
+	r, n := utf8.DecodeRuneInString(s)
+	return string(unicode.ToUpper(r)) + s[n:]
+}
+
 // Get an interger param
-//
-//  Usage:
-//
-//      id := req["id"].Int().
-//
-func (p *RequestParam) Int() int64 {
-	return p.Value.(int64)
+func (p *RequestParam) int() (int64, error) {
+	switch p.Value.(type) {
+	case string:
+		return strconv.ParseInt(p.Value.(string), 10, 64)
+	case int64:
+		return p.Value.(int64), nil
+	case float64:
+		return int64(p.Value.(float64)), nil
+	}
+	return -1, errors.New("Not Found")
 }
 
 // Get a float param
-//
-//  Usage:
-//
-//      id := req["id"].Float().
-//
-func (p *RequestParam) Float() float64 {
-	return p.Value.(float64)
+func (p *RequestParam) float() (float64, error) {
+	switch p.Value.(type) {
+	case string:
+		return strconv.ParseFloat(p.Value.(string), 64)
+	case int64:
+		return float64(p.Value.(int64)), nil
+	case float64:
+		return p.Value.(float64), nil
+	}
+	return -1, errors.New("Not Found")
 }
 
 // Get a boolean param
-//
-//  Usage:
-//
-//      id := req["id"].Bool().
-//
-func (p *RequestParam) Bool() bool {
-	return p.Value.(bool)
+func (p *RequestParam) bool() (bool, error) {
+	switch p.Value.(type) {
+	case string:
+		return strconv.ParseBool(p.Value.(string))
+	case bool:
+		return p.Value.(bool), nil
+	}
+	return false, errors.New("Not Found")
 }
 
-// Get a string param
-//
-//  Usage:
-//
-//      id := req["id"].String().
-//
-func (p *RequestParam) String() string {
-	return p.Value.(string)
+// This is responsible for setting up the input parameter of a handler
+func setInputParam(i reflect.Value, req Request) (reflect.Value, error) {
+	p := i.Type().In(0)
+	t := reflect.New(p.Elem())
+	for k, v := range req {
+		k = upperFirst(k)
+		sv, f := p.Elem().FieldByName(k)
+		if !f {
+			return t, errors.New("Not Found")
+		}
+		switch sv.Type.Kind() {
+		case reflect.Int64:
+			value, err := v.int()
+			if err != nil {
+				return t, err
+			}
+			t.Elem().FieldByName(k).SetInt(value)
+		case reflect.Float64:
+			value, err := v.float()
+			if err != nil {
+				return t, err
+			}
+			t.Elem().FieldByName(k).SetFloat(value)
+		case reflect.Bool:
+			value, err := v.bool()
+			if err != nil {
+				return t, err
+			}
+			t.Elem().FieldByName(k).SetBool(value)
+		case reflect.String:
+			t.Elem().FieldByName(k).SetString(v.Value.(string))
+		default:
+			return t, errors.New("Not Found")
+		}
+	}
+	return t, nil
 }
 
-// Register a filter.
+// Register a filter
 //
 //  Usage:
 //
@@ -230,7 +261,7 @@ func RegisterFilter(name string, f Filter) error {
 //
 //  Usage:
 //
-//      go_router.RegisterRoute(GET, "/v1/test/retrieve/id/{Int}", test_controller.Retrieve)
+//      go_router.RegisterRoute(GET, "/v1/test/retrieve", test_controller.Retrieve)
 //      go_router.RegisterRoute(POST, "/v1/test/save", test_controller.Save)
 //
 func RegisterRoute(method string, path string, n Node) error {
@@ -268,7 +299,7 @@ func Dispatch(w http.ResponseWriter, r *http.Request) {
 		if err := recover(); err != nil {
 			// log the error using a logger.
 			// log.Error(err)
-// print to terminal for now.
+			// print to terminal for now.
 			fmt.Println(err)
 			internalError(w, r)
 		}
@@ -280,8 +311,11 @@ func Dispatch(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case "GET", "DELETE":
-		routeKey = parseGet(r, req)
-		req = parseForm(r, req)
+		routeKey, err = parseGet(r, req)
+		if err != nil {
+			notFound(w, r)
+			return
+		}
 	case "POST":
 		routeKey = r.URL.Path
 		req, err = parseBody(r, req)
@@ -289,23 +323,32 @@ func Dispatch(w http.ResponseWriter, r *http.Request) {
 			// log the error and panic
 			panic(err)
 		}
-		req = parseForm(r, req)
 	default:
 		notSupported(w, r)
+		return
 	}
-	err = preDispatch(r, req)
-	if err != nil {
-		// log the error and panic
-		panic(err)
-	}
+	// get controller node from routes map.
 	c, err := getNode(r.Method, routeKey)
 	if err != nil {
 		notFound(w, r)
 		return
 	}
-	i := reflect.ValueOf(c).Call([]reflect.Value{reflect.ValueOf(req)})
-	if !i[1].IsNil() {
-		err = i[1].Interface().(error)
+	i := reflect.ValueOf(c)
+	t, err := setInputParam(i, req)
+	if err != nil {
+		notFound(w, r)
+		return
+	}
+	req = parseForm(r, req)
+	err = preDispatch(r, req)
+	if err != nil {
+		// log the error and panic
+		panic(err)
+	}
+	// invoke the controller.
+	cont := i.Call([]reflect.Value{t})
+	if !cont[1].IsNil() {
+		err = cont[1].Interface().(error)
 		if err != nil {
 			// log the error and panic
 			panic(err)
@@ -316,7 +359,7 @@ func Dispatch(w http.ResponseWriter, r *http.Request) {
 		// log the error and panic
 		panic(err)
 	}
-	data, err := json.Marshal(i[0].Interface())
+	data, err := json.Marshal(cont[0].Interface())
 	if err != nil {
 		// log the error and panic
 		panic(err)
